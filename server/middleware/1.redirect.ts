@@ -54,13 +54,17 @@ async function resolveQueryPasswordToken(token: string, link: Link, slug: string
 
   if (secret) {
     const decryptedToken = await decryptLinkPasswordToken(token, secret)
-    if (!decryptedToken.valid || decryptedToken.slug !== slug)
+    if (decryptedToken.valid) {
+      if (decryptedToken.slug !== slug)
+        return undefined
+
+      if (await verifyLinkPassword(decryptedToken.password, link.password))
+        return decryptedToken
+
       return undefined
+    }
 
-    if (await verifyLinkPassword(decryptedToken.password, link.password))
-      return decryptedToken
-
-    return undefined
+    // Backward compatibility for old URLs that pass the raw password as token.
   }
 
   if (await verifyLinkPassword(token, link.password))

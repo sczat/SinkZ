@@ -157,4 +157,79 @@ describe.sequential('password protected redirect', () => {
     expect(correctPasswordResponse.status).toBeLessThan(400)
     expect(correctPasswordResponse.headers.get('location')).toBe(payload.url)
   })
+
+  it('redirects when correct password is provided via token query param', async () => {
+    const password = 'token-secret123'
+    const payload = {
+      url: 'https://example.com/token-target',
+      slug: `redirect-token-${crypto.randomUUID()}`,
+      password,
+    }
+
+    const createResponse = await postJson('/api/link/create', payload)
+    expect(createResponse.status).toBe(201)
+    createdSlugs.push(payload.slug)
+
+    const response = await fetch(`/${payload.slug}?token=${encodeURIComponent(password)}`, { redirect: 'manual' })
+    expect(response.status).toBeGreaterThanOrEqual(300)
+    expect(response.status).toBeLessThan(400)
+    expect(response.headers.get('location')).toBe(payload.url)
+  })
+
+  it('shows the password page (not 403) when token query param is wrong', async () => {
+    const payload = {
+      url: 'https://example.com/token-target-wrong',
+      slug: `redirect-token-wrong-${crypto.randomUUID()}`,
+      password: 'token-secret456',
+    }
+
+    const createResponse = await postJson('/api/link/create', payload)
+    expect(createResponse.status).toBe(201)
+    createdSlugs.push(payload.slug)
+
+    const response = await fetch(`/${payload.slug}?token=wrong-value`, { redirect: 'manual' })
+    expect(response.status).toBe(200)
+    expect(await response.text()).toContain('Password Required')
+  })
+
+  it('strips the token query param from the destination when redirecting with query', async () => {
+    const password = 'strip-secret789'
+    const payload = {
+      url: 'https://example.com/dest-strip',
+      slug: `redirect-token-strip-${crypto.randomUUID()}`,
+      password,
+      redirectWithQuery: true,
+    }
+
+    const createResponse = await postJson('/api/link/create', payload)
+    expect(createResponse.status).toBe(201)
+    createdSlugs.push(payload.slug)
+
+    const response = await fetch(`/${payload.slug}?token=${encodeURIComponent(password)}&foo=bar`, { redirect: 'manual' })
+    expect(response.status).toBeGreaterThanOrEqual(300)
+    expect(response.status).toBeLessThan(400)
+
+    const location = response.headers.get('location')
+    expect(location).toContain('foo=bar')
+    expect(location).not.toContain('token')
+    expect(location).not.toContain(password)
+  })
+
+  it('shows the unsafe warning when an unsafe link is accessed with a correct token', async () => {
+    const password = 'unsafe-secret321'
+    const payload = {
+      url: 'https://example.com/unsafe-token-target',
+      slug: `redirect-token-unsafe-${crypto.randomUUID()}`,
+      password,
+      unsafe: true,
+    }
+
+    const createResponse = await postJson('/api/link/create', payload)
+    expect(createResponse.status).toBe(201)
+    createdSlugs.push(payload.slug)
+
+    const response = await fetch(`/${payload.slug}?token=${encodeURIComponent(password)}`, { redirect: 'manual' })
+    expect(response.status).toBe(200)
+    expect(await response.text()).toContain(payload.url)
+  })
 })

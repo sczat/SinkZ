@@ -1,4 +1,5 @@
 import type { Link } from '@/types'
+import { LINK_PASSWORD_QUERY_KEY } from '#shared/utils/link-password'
 import { parsePath, withQuery } from 'ufo'
 
 const SOCIAL_BOTS = [
@@ -86,6 +87,17 @@ export default eventHandler(async (event) => {
       }
       const userAgent = getHeader(event, 'user-agent') || ''
       const query = getQuery(event)
+
+      // Extract access password from query param (browser-friendly alternative to header/form),
+      // and strip it so it never leaks to the destination via redirectWithQuery.
+      let queryPassword: string | undefined
+      if (link.password) {
+        const rawToken = query[LINK_PASSWORD_QUERY_KEY]
+        if (typeof rawToken === 'string' && rawToken.length > 0)
+          queryPassword = rawToken
+        delete query[LINK_PASSWORD_QUERY_KEY]
+      }
+
       const shouldRedirectWithQuery = link.redirectWithQuery ?? redirectWithQuery
       const buildTarget = (url: string) => shouldRedirectWithQuery ? withQuery(url, query) : url
 
@@ -123,6 +135,16 @@ export default eventHandler(async (event) => {
           // Header-password path: check unsafe warning via x-link-confirm header
           if (link.unsafe && getHeader(event, 'x-link-confirm') !== 'true') {
             throw createError({ status: 403, statusText: 'Unsafe link: confirmation required (set x-link-confirm: true header)' })
+          }
+        }
+        else if (queryPassword !== undefined) {
+          if (!await verifyLinkPassword(queryPassword, link.password)) {
+            // Wrong token - fall back to the standard password form (no error), let the user type it.
+            return sendNoStoreHtml(generatePasswordHtml(slug, { locale: getLocale() }))
+          }
+          // Token correct - show unsafe warning if needed (carry password forward for the confirm POST).
+          if (link.unsafe) {
+            return sendNoStoreHtml(generateUnsafeWarningHtml(slug, finalTargetUrl, { password: queryPassword, locale: getLocale() }))
           }
         }
         else {

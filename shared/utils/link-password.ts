@@ -1,5 +1,7 @@
 export const LINK_PASSWORD_HASH_PREFIX = 'sink-pwd:v1:'
 export const LINK_PASSWORD_MASK_PREFIX = '__SINK_MASKED__'
+// Query param used to pass a link's access password directly in the URL (e.g. /slug?token=secret)
+export const LINK_PASSWORD_QUERY_KEY = 'token'
 
 export function isMaskedLinkPassword(password: string): boolean {
   return password.startsWith(LINK_PASSWORD_MASK_PREFIX)

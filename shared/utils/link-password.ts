@@ -9,9 +9,15 @@ interface LinkPasswordTokenRef {
   valid: boolean
 }
 
-const LINK_PASSWORD_TOKEN_REF_SEPARATOR = '_'
-const LINK_PASSWORD_TOKEN_REF_CHECKSUM_LENGTH = 2
-const LINK_PASSWORD_TOKEN_REF_CHECKSUM_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'
+interface LinkPasswordTokenPayload {
+  v: 1
+  slug: string
+  password: string
+  ref?: string
+}
+
+const LINK_PASSWORD_TOKEN_VERSION = 1
+const LINK_PASSWORD_TOKEN_IV_BYTES = 12
 
 export function isMaskedLinkPassword(password: string): boolean {
   return password.startsWith(LINK_PASSWORD_MASK_PREFIX)
@@ -21,49 +27,74 @@ export function isHashedLinkPassword(password: string): boolean {
   return password.startsWith(LINK_PASSWORD_HASH_PREFIX)
 }
 
-export function createLinkPasswordTokenWithRef(password: string, ref: string | undefined, checksumSecret: string): string {
+export async function createLinkPasswordTokenWithRef(password: string, ref: string | undefined, slug: string, secret: string): Promise<string> {
   const normalizedRef = ref?.trim()
-  if (!normalizedRef)
-    return password
-
-  return `${password}${LINK_PASSWORD_TOKEN_REF_SEPARATOR}${normalizedRef}${createLinkPasswordTokenRefChecksum(password, normalizedRef, checksumSecret)}`
-}
-
-export function splitLinkPasswordTokenRef(token: string, checksumSecret?: string): LinkPasswordTokenRef {
-  const separatorIndex = token.indexOf(LINK_PASSWORD_TOKEN_REF_SEPARATOR)
-  if (separatorIndex <= 0)
-    return { password: token, valid: true }
-
-  const password = token.slice(0, separatorIndex)
-  const refWithChecksum = token.slice(separatorIndex + 1)
-  if (refWithChecksum.length <= LINK_PASSWORD_TOKEN_REF_CHECKSUM_LENGTH)
-    return { password, valid: false }
-
-  const ref = refWithChecksum.slice(0, -LINK_PASSWORD_TOKEN_REF_CHECKSUM_LENGTH)
-  const checksum = refWithChecksum.slice(-LINK_PASSWORD_TOKEN_REF_CHECKSUM_LENGTH)
-  if (!checksumSecret || checksum !== createLinkPasswordTokenRefChecksum(password, ref, checksumSecret))
-    return { password, valid: false }
-
-  return {
+  const payload: LinkPasswordTokenPayload = {
+    v: LINK_PASSWORD_TOKEN_VERSION,
+    slug,
     password,
-    ref,
-    valid: true,
+    ...(normalizedRef ? { ref: normalizedRef } : {}),
+  }
+  const iv = crypto.getRandomValues(new Uint8Array(LINK_PASSWORD_TOKEN_IV_BYTES))
+  const key = await getLinkPasswordTokenKey(secret)
+  const encrypted = new Uint8Array(await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv },
+    key,
+    toArrayBuffer(encodeText(JSON.stringify(payload))),
+  ))
+  const token = new Uint8Array(iv.length + encrypted.length)
+  token.set(iv)
+  token.set(encrypted, iv.length)
+
+  return bytesToBase64Url(token)
+}
+
+export async function decryptLinkPasswordToken(token: string, secret: string): Promise<LinkPasswordTokenRef & { slug?: string }> {
+  if (!secret)
+    return { password: token, valid: false }
+
+  try {
+    const bytes = base64UrlToBytes(token)
+    if (bytes.length <= LINK_PASSWORD_TOKEN_IV_BYTES)
+      return { password: token, valid: false }
+
+    const iv = bytes.slice(0, LINK_PASSWORD_TOKEN_IV_BYTES)
+    const encrypted = bytes.slice(LINK_PASSWORD_TOKEN_IV_BYTES)
+    const key = await getLinkPasswordTokenKey(secret)
+    const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, toArrayBuffer(encrypted))
+    const payload = JSON.parse(decodeText(new Uint8Array(decrypted))) as unknown
+
+    if (!isLinkPasswordTokenPayload(payload))
+      return { password: token, valid: false }
+
+    return {
+      password: payload.password,
+      ref: payload.ref,
+      slug: payload.slug,
+      valid: true,
+    }
+  }
+  catch {
+    return { password: token, valid: false }
   }
 }
 
-function createLinkPasswordTokenRefChecksum(password: string, ref: string, checksumSecret: string): string {
-  let hash = 2166136261
-  const value = `${password}\0${ref}\0${checksumSecret}`
+async function getLinkPasswordTokenKey(secret: string): Promise<CryptoKey> {
+  const keyBytes = await crypto.subtle.digest('SHA-256', toArrayBuffer(encodeText(secret)))
+  return await crypto.subtle.importKey('raw', keyBytes, 'AES-GCM', false, ['encrypt', 'decrypt'])
+}
 
-  for (const char of value) {
-    hash ^= char.codePointAt(0) ?? 0
-    hash = Math.imul(hash, 16777619)
-  }
+function isLinkPasswordTokenPayload(value: unknown): value is LinkPasswordTokenPayload {
+  if (!value || typeof value !== 'object')
+    return false
 
-  return [
-    LINK_PASSWORD_TOKEN_REF_CHECKSUM_ALPHABET.charAt(hash & 0x3F),
-    LINK_PASSWORD_TOKEN_REF_CHECKSUM_ALPHABET.charAt((hash >>> 6) & 0x3F),
-  ].join('')
+  const payload = value as Record<string, unknown>
+  return payload.v === LINK_PASSWORD_TOKEN_VERSION
+    && typeof payload.slug === 'string'
+    && payload.slug.length > 0
+    && typeof payload.password === 'string'
+    && payload.password.length > 0
+    && (payload.ref === undefined || typeof payload.ref === 'string')
 }
 
 function decodeBase64Url(value: string): string | undefined {
@@ -76,6 +107,35 @@ function decodeBase64Url(value: string): string | undefined {
   catch {
     return undefined
   }
+}
+
+function bytesToBase64Url(bytes: Uint8Array): string {
+  let binary = ''
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte)
+  }
+  return btoa(binary)
+    .replaceAll('+', '-')
+    .replaceAll('/', '_')
+    .replaceAll('=', '')
+}
+
+function base64UrlToBytes(value: string): Uint8Array {
+  const base64 = value.replaceAll('-', '+').replaceAll('_', '/')
+  const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, '=')
+  return Uint8Array.from(atob(padded), char => char.charCodeAt(0))
+}
+
+function encodeText(value: string): Uint8Array {
+  return new TextEncoder().encode(value)
+}
+
+function decodeText(value: Uint8Array): string {
+  return new TextDecoder().decode(value)
+}
+
+function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
 }
 
 export function getLinkPasswordTail(password: string): string {

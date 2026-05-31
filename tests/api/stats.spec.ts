@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { getAccessLogReferer } from '../../server/utils/access-log'
-import { createLinkPasswordTokenWithRef, splitLinkPasswordTokenRef } from '../../shared/utils/link-password'
+import { createLinkPasswordTokenWithRef, decryptLinkPasswordToken } from '../../shared/utils/link-password'
 import { fetch, fetchWithAuth } from '../utils'
 
 function createRefererEvent(path: string, referer?: string) {
@@ -16,28 +16,26 @@ function createRefererEvent(path: string, referer?: string) {
 }
 
 describe('access log referer', () => {
-  it('creates and splits password tokens with embedded ref', () => {
-    const token = createLinkPasswordTokenWithRef('Bv3gJYLr', 'S23ad', 'stored-password-hash')
+  it('creates and decrypts password tokens with embedded ref', async () => {
+    const token = await createLinkPasswordTokenWithRef('Bv3gJYLr', 'S23ad', 'portfolio', 'token-secret')
 
-    expect(token).toMatch(/^Bv3gJYLr_S23ad[\w-]{2}$/)
-    expect(splitLinkPasswordTokenRef(token, 'stored-password-hash')).toEqual({ password: 'Bv3gJYLr', ref: 'S23ad', valid: true })
+    expect(token).not.toContain('Bv3gJYLr')
+    expect(token).not.toContain('S23ad')
+    expect(await decryptLinkPasswordToken(token, 'token-secret')).toEqual({ password: 'Bv3gJYLr', ref: 'S23ad', slug: 'portfolio', valid: true })
   })
 
-  it('marks password tokens with modified embedded ref as invalid', () => {
-    const token = createLinkPasswordTokenWithRef('Bv3gJYLr', 'S23ad', 'stored-password-hash')
-    const modifiedToken = token.replace('S23ad', 'T45bc')
+  it('marks modified encrypted password tokens as invalid', async () => {
+    const token = await createLinkPasswordTokenWithRef('Bv3gJYLr', 'S23ad', 'portfolio', 'token-secret')
+    const replacement = token.at(-1) === 'A' ? 'B' : 'A'
+    const modifiedToken = `${token.slice(0, -1)}${replacement}`
 
-    expect(splitLinkPasswordTokenRef(modifiedToken, 'stored-password-hash')).toEqual({ password: 'Bv3gJYLr', valid: false })
+    expect(await decryptLinkPasswordToken(modifiedToken, 'token-secret')).toEqual({ password: modifiedToken, valid: false })
   })
 
-  it('marks password tokens with a different checksum secret as invalid', () => {
-    const token = createLinkPasswordTokenWithRef('Bv3gJYLr', 'S23ad', 'stored-password-hash')
+  it('marks encrypted password tokens with a different secret as invalid', async () => {
+    const token = await createLinkPasswordTokenWithRef('Bv3gJYLr', 'S23ad', 'portfolio', 'token-secret')
 
-    expect(splitLinkPasswordTokenRef(token, 'other-stored-password-hash')).toEqual({ password: 'Bv3gJYLr', valid: false })
-  })
-
-  it('keeps regular password tokens valid without ref', () => {
-    expect(splitLinkPasswordTokenRef('Bv3gJYLr')).toEqual({ password: 'Bv3gJYLr', valid: true })
+    expect(await decryptLinkPasswordToken(token, 'other-token-secret')).toEqual({ password: token, valid: false })
   })
 
   it('prefers ref query over HTTP referer', () => {
@@ -46,8 +44,8 @@ describe('access log referer', () => {
     expect(getAccessLogReferer(event as never)).toBe('test')
   })
 
-  it('uses verified token ref context when ref query is missing', () => {
-    const event = createRefererEvent(`/portfolio?token=${createLinkPasswordTokenWithRef('Bv3gJYLr', 'S23ad', 'stored-password-hash')}`, 'https://example.com/page')
+  it('uses decrypted token ref context when ref query is missing', () => {
+    const event = createRefererEvent('/portfolio?token=encrypted', 'https://example.com/page')
     event.context = { accessLogReferer: 'S23ad' }
 
     expect(getAccessLogReferer(event as never)).toBe('S23ad')

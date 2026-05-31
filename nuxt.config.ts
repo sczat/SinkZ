@@ -22,6 +22,7 @@ export default defineNuxtConfig({
     siteToken: process.env.NUXT_SITE_TOKEN || crypto.randomUUID(),
     redirectStatusCode: '301',
     linkCacheTtl: 60,
+    linkTokenSecret: process.env.NUXT_LINK_TOKEN_SECRET || process.env.NUXT_SITE_TOKEN || '',
     redirectWithQuery: false,
     homeURL: '',
     cfAccountId: '',

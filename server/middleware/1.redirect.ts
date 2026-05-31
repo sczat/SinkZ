@@ -1,5 +1,5 @@
 import type { Link } from '@/types'
-import { LINK_PASSWORD_QUERY_KEY, splitLinkPasswordTokenRef } from '#shared/utils/link-password'
+import { decryptLinkPasswordToken, LINK_PASSWORD_QUERY_KEY } from '#shared/utils/link-password'
 import { parsePath, withQuery } from 'ufo'
 
 const SOCIAL_BOTS = [
@@ -48,13 +48,23 @@ function hasOgConfig(link: Link): boolean {
   return !!(link.title || link.image)
 }
 
-async function resolveQueryPasswordToken(token: string, storedPassword: string): Promise<{ password: string, ref?: string } | undefined> {
-  const tokenRef = splitLinkPasswordTokenRef(token, storedPassword)
-  if (!tokenRef.valid)
+async function resolveQueryPasswordToken(token: string, link: Link, slug: string, secret: string): Promise<{ password: string, ref?: string } | undefined> {
+  if (!link.password)
     return undefined
 
-  if (await verifyLinkPassword(tokenRef.password, storedPassword))
-    return tokenRef
+  if (secret) {
+    const decryptedToken = await decryptLinkPasswordToken(token, secret)
+    if (!decryptedToken.valid || decryptedToken.slug !== slug)
+      return undefined
+
+    if (await verifyLinkPassword(decryptedToken.password, link.password))
+      return decryptedToken
+
+    return undefined
+  }
+
+  if (await verifyLinkPassword(token, link.password))
+    return { password: token }
 
   return undefined
 }
@@ -62,7 +72,7 @@ async function resolveQueryPasswordToken(token: string, storedPassword: string):
 export default eventHandler(async (event) => {
   const { pathname: slug } = parsePath(event.path.replace(/^\/|\/$/g, ''))
   const { slugRegex, reserveSlug } = useAppConfig()
-  const { homeURL, linkCacheTtl, caseSensitive, redirectWithQuery, redirectStatusCode } = useRuntimeConfig(event)
+  const { homeURL, linkCacheTtl, caseSensitive, redirectWithQuery, redirectStatusCode, linkTokenSecret } = useRuntimeConfig(event)
   const { cloudflare } = event.context
 
   if (event.path === '/' && homeURL)
@@ -150,7 +160,7 @@ export default eventHandler(async (event) => {
           }
         }
         else if (queryPassword !== undefined) {
-          const resolvedToken = await resolveQueryPasswordToken(queryPassword, link.password)
+          const resolvedToken = await resolveQueryPasswordToken(queryPassword, link, slug, linkTokenSecret)
           if (!resolvedToken) {
             // Wrong token - fall back to the standard password form (no error), let the user type it.
             return sendNoStoreHtml(generatePasswordHtml(slug, { locale: getLocale() }))

@@ -1,5 +1,38 @@
 import { describe, expect, it } from 'vitest'
+import { getAccessLogReferer } from '../../server/utils/access-log'
 import { fetch, fetchWithAuth } from '../utils'
+
+function createRefererEvent(path: string, referer?: string) {
+  return {
+    path,
+    node: {
+      req: {
+        headers: referer ? { referer } : {},
+        url: path,
+      },
+    },
+  }
+}
+
+describe('access log referer', () => {
+  it('prefers ref query over HTTP referer', () => {
+    const event = createRefererEvent('/portfolio?ref=test', 'https://example.com/page')
+
+    expect(getAccessLogReferer(event as never)).toBe('test')
+  })
+
+  it('normalizes URL-style ref query to its host', () => {
+    const event = createRefererEvent('/portfolio?ref=https%3A%2F%2Fcampaign.example.com%2Flanding%3Futm_source%3Dx')
+
+    expect(getAccessLogReferer(event as never)).toBe('campaign.example.com')
+  })
+
+  it('falls back to HTTP referer when ref query is empty', () => {
+    const event = createRefererEvent('/portfolio?ref=', 'https://example.com/page')
+
+    expect(getAccessLogReferer(event as never)).toBe('example.com')
+  })
+})
 
 describe('/api/stats/counters', () => {
   it('returns counters data with valid auth', async () => {

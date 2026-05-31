@@ -55,6 +55,9 @@ export type LogsMap = {
   [key in DoublesMap[DoublesKey]]?: number | undefined
 }
 
+const REF_QUERY_KEY = 'ref'
+const MAX_REFERER_LENGTH = 256
+
 export const logsMap = Object.fromEntries([
   ...Object.entries(blobsMap).map(([k, v]) => [v, k]),
   ...Object.entries(doublesMap).map(([k, v]) => [v, k]),
@@ -92,10 +95,28 @@ export function doubles2logs(doubles: number[]) {
   }, {} as Partial<LogsMap>)
 }
 
+function normalizeReferer(value: unknown): string | undefined {
+  const rawValue = Array.isArray(value) ? value[0] : value
+  if (typeof rawValue !== 'string')
+    return undefined
+
+  const trimmedValue = rawValue.trim()
+  if (!trimmedValue)
+    return undefined
+
+  const { host } = parseURL(trimmedValue)
+  return (host || trimmedValue).slice(0, MAX_REFERER_LENGTH)
+}
+
+export function getAccessLogReferer(event: H3Event): string | undefined {
+  const query = getQuery(event)
+  return normalizeReferer(query[REF_QUERY_KEY]) || normalizeReferer(getHeader(event, 'referer'))
+}
+
 export function useAccessLog(event: H3Event) {
   const ip = getHeader(event, 'cf-connecting-ip') || getHeader(event, 'x-real-ip') || getRequestIP(event, { xForwardedFor: true })
 
-  const { host: referer } = parseURL(getHeader(event, 'referer'))
+  const referer = getAccessLogReferer(event)
 
   const acceptLanguage = getHeader(event, 'accept-language') || ''
   const language = (parseAcceptLanguage(acceptLanguage) || [])[0]

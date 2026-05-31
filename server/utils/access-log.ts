@@ -110,7 +110,7 @@ function normalizeReferer(value: unknown): string | undefined {
 
 export function getAccessLogReferer(event: H3Event): string | undefined {
   const query = getQuery(event)
-  return normalizeReferer(query[REF_QUERY_KEY]) || normalizeReferer(getHeader(event, 'referer'))
+  return normalizeReferer(query[REF_QUERY_KEY]) || normalizeReferer(event.context.accessLogReferer) || normalizeReferer(getHeader(event, 'referer'))
 }
 
 export function useAccessLog(event: H3Event) {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { getAccessLogReferer } from '../../server/utils/access-log'
+import { createLinkPasswordTokenWithRef, splitLinkPasswordTokenRef } from '../../shared/utils/link-password'
 import { fetch, fetchWithAuth } from '../utils'
 
 function createRefererEvent(path: string, referer?: string) {
@@ -15,10 +16,41 @@ function createRefererEvent(path: string, referer?: string) {
 }
 
 describe('access log referer', () => {
+  it('creates and splits password tokens with embedded ref', () => {
+    const token = createLinkPasswordTokenWithRef('Bv3gJYLr', 'S23ad', 'stored-password-hash')
+
+    expect(token).toMatch(/^Bv3gJYLr_S23ad[\w-]{2}$/)
+    expect(splitLinkPasswordTokenRef(token, 'stored-password-hash')).toEqual({ password: 'Bv3gJYLr', ref: 'S23ad', valid: true })
+  })
+
+  it('marks password tokens with modified embedded ref as invalid', () => {
+    const token = createLinkPasswordTokenWithRef('Bv3gJYLr', 'S23ad', 'stored-password-hash')
+    const modifiedToken = token.replace('S23ad', 'T45bc')
+
+    expect(splitLinkPasswordTokenRef(modifiedToken, 'stored-password-hash')).toEqual({ password: 'Bv3gJYLr', valid: false })
+  })
+
+  it('marks password tokens with a different checksum secret as invalid', () => {
+    const token = createLinkPasswordTokenWithRef('Bv3gJYLr', 'S23ad', 'stored-password-hash')
+
+    expect(splitLinkPasswordTokenRef(token, 'other-stored-password-hash')).toEqual({ password: 'Bv3gJYLr', valid: false })
+  })
+
+  it('keeps regular password tokens valid without ref', () => {
+    expect(splitLinkPasswordTokenRef('Bv3gJYLr')).toEqual({ password: 'Bv3gJYLr', valid: true })
+  })
+
   it('prefers ref query over HTTP referer', () => {
     const event = createRefererEvent('/portfolio?ref=test', 'https://example.com/page')
 
     expect(getAccessLogReferer(event as never)).toBe('test')
+  })
+
+  it('uses verified token ref context when ref query is missing', () => {
+    const event = createRefererEvent(`/portfolio?token=${createLinkPasswordTokenWithRef('Bv3gJYLr', 'S23ad', 'stored-password-hash')}`, 'https://example.com/page')
+    event.context = { accessLogReferer: 'S23ad' }
+
+    expect(getAccessLogReferer(event as never)).toBe('S23ad')
   })
 
   it('normalizes URL-style ref query to its host', () => {

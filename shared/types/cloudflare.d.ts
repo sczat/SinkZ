@@ -5,6 +5,7 @@ declare module 'h3' {
       env: Cloudflare.Env
       context: ExecutionContext
     }
+    accessLogReferer?: string
   }
 }
 

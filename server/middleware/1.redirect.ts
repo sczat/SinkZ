@@ -1,5 +1,5 @@
 import type { Link } from '@/types'
-import { LINK_PASSWORD_QUERY_KEY } from '#shared/utils/link-password'
+import { LINK_PASSWORD_QUERY_KEY, splitLinkPasswordTokenRef } from '#shared/utils/link-password'
 import { parsePath, withQuery } from 'ufo'
 
 const SOCIAL_BOTS = [
@@ -48,6 +48,17 @@ function hasOgConfig(link: Link): boolean {
   return !!(link.title || link.image)
 }
 
+async function resolveQueryPasswordToken(token: string, storedPassword: string): Promise<{ password: string, ref?: string } | undefined> {
+  const tokenRef = splitLinkPasswordTokenRef(token, storedPassword)
+  if (!tokenRef.valid)
+    return undefined
+
+  if (await verifyLinkPassword(tokenRef.password, storedPassword))
+    return tokenRef
+
+  return undefined
+}
+
 export default eventHandler(async (event) => {
   const { pathname: slug } = parsePath(event.path.replace(/^\/|\/$/g, ''))
   const { slugRegex, reserveSlug } = useAppConfig()
@@ -91,6 +102,7 @@ export default eventHandler(async (event) => {
       // Extract access password from query param (browser-friendly alternative to header/form),
       // and strip it so it never leaks to the destination via redirectWithQuery.
       let queryPassword: string | undefined
+      let queryPasswordRef: string | undefined
       if (link.password) {
         const rawToken = query[LINK_PASSWORD_QUERY_KEY]
         if (typeof rawToken === 'string' && rawToken.length > 0)
@@ -138,10 +150,13 @@ export default eventHandler(async (event) => {
           }
         }
         else if (queryPassword !== undefined) {
-          if (!await verifyLinkPassword(queryPassword, link.password)) {
+          const resolvedToken = await resolveQueryPasswordToken(queryPassword, link.password)
+          if (!resolvedToken) {
             // Wrong token - fall back to the standard password form (no error), let the user type it.
             return sendNoStoreHtml(generatePasswordHtml(slug, { locale: getLocale() }))
           }
+          queryPassword = resolvedToken.password
+          queryPasswordRef = resolvedToken.ref
           // Token correct - show unsafe warning if needed (carry password forward for the confirm POST).
           if (link.unsafe) {
             return sendNoStoreHtml(generateUnsafeWarningHtml(slug, finalTargetUrl, { password: queryPassword, locale: getLocale() }))
@@ -166,6 +181,7 @@ export default eventHandler(async (event) => {
       }
 
       event.context.link = link
+      event.context.accessLogReferer = queryPasswordRef
       try {
         await useAccessLog(event)
       }
